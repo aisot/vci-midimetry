@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <title>簡易MIDI信号レコーダー</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.5.1/jquery.js">
+    </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/semantic-ui/2.4.1/semantic.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/semantic-ui/2.4.1/semantic.min.css" />
+
+</head>
+
+<script>
+    let time_count = 0;
+    let timerId = false;
+    const mSize = 256 + 14;
+    let s_time;
+    let e_time;
+    let noteColor = new Array()
+    let perfData = new Array()
+    let timer_stop = false
+    let audio = new Audio();
+    let audioRady = false
+    let midi_duration = 0;
+
+    function offset_248_decode(input) {
+        for (var i = 0, output = []; i < input.length; i++)
+            output.push(input.charCodeAt(i) - 248);
+        return output;
+    }
+
+    let DL = {};
+    //dataをブラウザーへ送りダウンロードさせる
+    DL.export = function (data, filename, type) {
+        let bom = new Uint8Array([0xEF, 0xBB, 0xBF]);
+        let blob = new Blob([bom, data], { type: `${type}` });
+        let a = document.createElement('a');
+        a.download = `${filename}`;
+        a.href = (window.URL || window.webkitURL).createObjectURL(blob);
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+    }
+    //CSVデータを作ってDL.exportへ
+    DL.csv = function (arr, name) {
+        let data = arr.map((arr) => arr.join(',')).join('\r\n');
+        this.export(data, `${name}.csv`, 'text/csv');
+    };
+
+    //ofset248データを生成してDL.exportへ
+    //時間は3byteに分ける24bit=最大16777216/msec 4.6時間まで可能
+    //戻すときは let time = byte1 | byte2 << 8 | byte3 << 16
+    function to24bitByte(val) {
+        let byte1 = (val & 0x0000FF)
+        let byte2 = (val & 0x00FF00) >> 8
+        let byte3 = (val & 0xFF0000) >> 16
+        let td = new Array(byte1, byte2, byte3)
+        return td
+    }
+    DL.offset248 = function (arr, name) {
+        let offset248_encode = function (input) {
+            for (var i = 0, output = ""; i < input.length; i++)
+                output += String.fromCharCode(input[i] + 248);
+            return output;
+        }
+        let perfByteData = new Array()
+        for (let d of arr) {
+            if (d[0] > 0xFFFFFF) {
+                alert("16777216ミリ秒(約4.6時間)を超えてるため変換できません")
+                return
+            }
+            let byte = to24bitByte(d[0])
+            perfByteData.push(byte[0])
+            perfByteData.push(byte[1])
+            perfByteData.push(byte[2])
+
+            perfByteData.push(d[1])
+            perfByteData.push(d[2])
+        }
+        let duration = $("#duration").val()
+        let lua = 'return {\n duration = ' + duration + " ,\n " + 'data = "' + offset248_encode(perfByteData) + '"' + "\n}";
+        this.export(lua, `${name}_offset248.lua`, 'text/lua');
+    };
+    //Luaデータを生成してDL.exportへ
+    DL.lua = function (arr, name) {
+        let duration = $("#duration").val()
+        let lua = "return {\n duration = " + duration + " ,\n data = {" + arr + "}\n}";
+        this.export(lua, `${name}.lua`, 'text/lua');
+    };
+
+    function createKenbanButton(i, margin_right, color, height, width, ch) {
+        let button = '<button id="ch' + ch + 'key' + i + '" style="border: 1px solid #111111;margin:0px;padding:0px;margin-right:' + margin_right + 'px;font-size:2px;width:' + width + 'px;height:' + height + 'px;background-color:' + color + '"></button>'
+        return button
+    }
+    function createKenban(ch) {
+        var kokken = $('<div style="padding-left:20px;width:1060px;height:32px;display: inline-block;z-index:20;position:relative;margin-top:-32px"></div>');
+        var hakken = $('<div style="padding-left:10px;width:1060px;height:32px;display: inline-block;z-index:10;position:relative;top:-16px;margin-top:-32px"></div>');
+        let n = 0
+        for (i = 0; i <= 127; i++) {
+            if (n == 1 || n == 3 || n == 6 || n == 8 || n == 10) {
+                noteColor[i] = "#000000";
+                if (n == 3 || n == 10) { margin_right = 21 } else { margin_right = 7 }
+                kokken.append(createKenbanButton(i, margin_right, noteColor[i], 22, 7, ch));
+            } else {
+                noteColor[i] = "#FFFFFF";
+                hakken.append(createKenbanButton(i, 0, noteColor[i], 32, 14, ch));
+            }
+            if (n++ == 12) { n = 1 }
+        }
+        $('#kenban').append(kokken);
+        $('#kenban').append(hakken);
+        $('#kenban').append('<div style="padding-left:4px;display: inline-block;z-index:10;position:relative;top:-24px;height:-32px">' + ch + 'ch</div>');
+    }
+
+    function createDrums() {
+        var drums = $('<div style="margin:0px;padding:0px"></div>');
+
+        let drums_kit = ["kick", "snare", "tom1", "tom2", "tom3", "hihat_open", "hihat_close", "cymbal1", "cymbal2"
+            , "pad1", "pad2", "pad3", "pad4", "pad5", "pad6"]
+
+        for (const elem of drums_kit) {
+            let html = '<button id="' + elem + '" style="background-color:#FFFFFF;width:64px;height:64px;border: 1px solid #111111;margin:0px;padding:0px;font-size:8px">' + elem + '</button>'
+            drums.append(html);
+        }
+        $('#drums').append(drums);
+    }
+
+    $(function () {
+
+        for (i = 1; i <= 16; i++)
+            createKenban(i)
+        createDrums()
+
+        var data = Array(mSize);
+        var i, j;
+        var midi_num = 0;
+        for (i = 0; i < mSize; i++) data[i] = 0;
+
+        var m = null;
+        var inputs = null;
+        var outputs = null;
+
+        navigator.requestMIDIAccess().then(success, failure);
+
+        function success(midiAccess) {
+            m = midiAccess;
+
+            if (typeof m.inputs === "function") {
+                inputs = m.inputs();
+                outputs = m.outputs();
+            } else {
+                var inputIterator = m.inputs.values();
+                inputs = [];
+                for (var o = inputIterator.next(); !o.done; o = inputIterator.next()) {
+                    inputs.push(o.value)
+                }
+
+                var outputIterator = m.outputs.values();
+                outputs = [];
+                for (var o = outputIterator.next(); !o.done; o = outputIterator.next()) {
+                    outputs.push(o.value)
+                }
+            }
+
+            $("#midi_device").append("MIDI入力機器の数:" + inputs.length);
+            $("#midi_device").append("<br>")
+            $("#midi_device").append("MIDI出力機器の数:" + outputs.length);
+
+            for (var i = 0; i < inputs.length; i++) {
+                inputs[i].onmidimessage = handleMIDIMessage;
+            }
+        }
+
+        function failure(error) {
+            alert("Failed MIDI!" + msg);
+        }
+
+        function handleMIDIMessage(event) {
+            if (event.data[0] == 0xFE) return;
+            if (event.data.length > 1) {
+                midi_num++; if (midi_num >= mSize) midi_num = mSize;
+                for (var i = 0; i < mSize - event.data.length; i++) {
+                    data[mSize - 1 - i] = data[mSize - 1 - i - event.data.length];
+                }
+                for (i = 0; i < event.data.length; i++) data[i] = event.data[i];
+                onMidiEvent(data, event.data.length);
+                onKenbanMoniter(data, event.data.length);
+                onDrums(data, event.data.length);
+            }
+        }
+
+        function toHex(v) {
+            return '0x' + (('00' + v.toString(16).toUpperCase()).substr(-2));
+        }
+        function toNote(v) {
+            let noteName = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+            let num = 0
+            if (v >= 12) { num = Math.floor(v / 12) }
+            return noteName[v % 12] + (num - 2)
+        }
+
+        function onDrums(data, length) {
+            let event = data[0]
+            let note = data[1]
+            let ch = (event & 0x0F) + 1
+            let drumMap = {}
+            for (let i = 0; i < 127; i++) {
+                drumMap[i] = "pad" + (i % 6 + 1)
+            }
+
+            //DrumKit Map
+            //"kick", "snare", "tom1", "tom2", "tom3", 
+            //"hihat_open", "hihat_close", "Cymbal1", "cymbal2", 
+            //"pad1", "pad2", "pad3", "pad4", "pad5", "pad6"]
+
+            var arr = [33, 35, 36];
+            for (const elem of arr) {
+                drumMap[elem] = 'kick';
+            }
+            var arr = [27, 29, 31, 34, 38, 40];
+            for (const elem of arr) {
+                drumMap[elem] = 'snare';
+            }
+
+            drumMap[41] = "tom3";
+            drumMap[43] = "tom3";
+            drumMap[45] = "tom2";
+            drumMap[47] = "tom2";
+            drumMap[48] = "tom1";
+            drumMap[50] = "tom1";
+            drumMap[42] = "hihat_close"
+            drumMap[46] = "hihat_open"
+            drumMap[44] = "hihat_close"
+            drumMap[51] = "cymbal1"
+            drumMap[49] = "cymbal1"
+
+            var arr = [52, 53, 54, 55, 57, 59];
+            for (const elem of arr) {
+                drumMap[elem] = 'cymbal2';
+            }
+
+            if (ch == 10) {
+                let name = drumMap[note]
+                if (!name) {
+                    $('#drum_note2').append("--> 10ch : " + note + "=" + name + "<br>")
+                }
+                $('#drum_note').text("10ch : " + note + "=" + name)
+
+                if (name) {
+                    if (event >= 0x90 && event <= 0x9F) {
+                        $("#" + name).css("background-color", "red")
+                    } else if (event >= 0x80 && event <= 0x8F) {
+                        $("#" + name).css("background-color", "#DDDDDD")
+                    }
+                }
+            }
+        }
+
+        function onKenbanMoniter(data, length) {
+            let event = data[0]
+            let note = data[1]
+            //note on
+            let ch = (event & 0x0F) + 1
+
+            if (event >= 0x90 && event <= 0x9F) {
+                $("#ch" + ch + "key" + note).css("background-color", "red")
+            } else if (event >= 0x80 && event <= 0x8F) {
+                let color = noteColor[note]
+                if (color == "#FFFFFF") {
+                    color = "#DDDDDD"
+                } else {
+                    color = "#555555"
+                }
+                $("#ch" + ch + "key" + note).css("background-color", color)
+            }
+            $("#midi_moniter").text(event + "(" + toHex(event) + ")" + " , " + note + "(" + toHex(note) + ") , " + toNote(note))
+        }
+
+        function onMidiEvent(data, length) {
+
+            let event = data[0]
+            let note = data[1]
+
+            //note recode
+            if (event >= 0x80 && event <= 0x9F) {
+                timerStart()
+                let diff = new Date().getTime() - s_time.getTime()
+                perfData.push([diff, event, note]);
+                midi_duration = diff
+            }
+        }
+
+        function timerStart() {
+            if (timerId == false && timer_stop == false) {
+                s_time = new Date();
+                timerId = setInterval(function () {
+                    let msec = new Date().getTime() - s_time.getTime()
+                    $('#time_count').text(msec)
+                    $('#recode_count').text(perfData.length)
+                }, 1);
+                return timerId
+            }
+            return false
+        }
+        function timerStop() {
+            clearInterval(timerId)
+            timerId = false
+            timer_stop = true
+
+            if ($("#duration").val() == 0) {
+                $("#duration").val(midi_duration)
+            }
+        }
+
+        $('#rec_start').on('click', function () {
+            if (timer_stop == true) {
+                alert("記録済みです。ブラウザをリロードしてクリアしてください")
+            } else {
+                timerStart()
+                if (audioRady)
+                    audio.play()
+            }
+        });
+        $('#rec_stop').on('click', function () {
+            timerStop();
+            if (audioRady) {
+                audioElm.paused();
+                audioElm.currentTime = 0;
+            }
+        });
+        $('#rec_dl').on('click', function () {
+            timerStop();
+            DL.lua(perfData, 'perf_data');
+        });
+        $('#rec_dl_offset248').on('click', function () {
+            timerStop();
+            DL.offset248(perfData, 'perf_data');
+        });
+        //mp3 file load
+        function handleFileSelect(evt) {
+            evt.stopPropagation();
+            evt.preventDefault();
+            var files = evt.dataTransfer.files;
+            var output = [];
+            let f = files[0]
+            if (f) {
+                audio.src = URL.createObjectURL(f);
+                audio.name = f.name.split("/").reverse()[0].split('.')[0];
+                audio.load();
+                audio.addEventListener('loadedmetadata', function (e) {
+                    $('#duration').val(audio.duration * 1000)
+                    //alert(audio.name + " | " + audio.duration)
+                    audioRady = true
+                })
+            }
+        }
+        function handleDragOver(event) {
+            event.stopPropagation();
+            event.preventDefault();
+            event.dataTransfer.dropEffect = 'copy';
+        }
+        var dropZone = document.getElementById('drop_zone');
+        dropZone.addEventListener('dragover', handleDragOver, false);
+        dropZone.addEventListener('drop', handleFileSelect, false);
+
+
+    });//jQuery ready
+
+</script>
+
+<style>
+    #drop_zone {
+        border: 2px dashed #bbb;
+        -moz-border-radius: 5px;
+        -webkit-border-radius: 5px;
+        border-radius: 5px;
+        padding: 25px;
+        text-align: center;
+        font: 20pt bold 'Vollkorn';
+        color: #bbb;
+    }
+</style>
+
+<body>
+    <div class="ui main container">
+
+        <div class="ui info message">
+            <h4 class="ui header"><i class="chart area icon"></i>簡易MIDI信号レコーダー</h4>
+            <p class="ui">
+                MIDI信号をブラウザで記録してLuaのモジュールとしてダウンロードできます。<br>
+                開始ボタンが押されるか最初のMIDIノート信号を受信すると記録が開始されます。<br>
+                記録されるの情報は、時間(ミリ秒)、チャンネル毎のオンオフ(0x80～0x9F)と、ノート番号(0-127)です<br>
+                ベロシティその他のMIDI情報は記録されません<br><br>
+                ダウンロードできるLuaのモジュールは、 時間、MIDIイベント情報、ノート番号の順で記録された配列形式と<BR>
+                バイナリをUnicodeテキスト情報として扱うための248バイト移動しただけのOffset248形式の2種類です。<br>
+                Offset248形式の場合、1つの記録が5バイト情報で最初の3バイトが時間情報になります。<br>
+                データ上の最大時間は、16777216ミリ秒(約4.6時間)までですが、たぶんその前にメモリが足りなくなって記録できなくなります<br>
+            <div style="padding-top:0.5em">
+                参考 : <a href="https://github.com/diafygi/Offset248">Offset248</a>
+            </div>
+            </p>
+        </div>
+
+        <div class="ui segment" id="about_segment">
+            <h4 class="ui header"><i class="chart area icon"></i>記録情報</h4>
+            <div class="ui message">
+                <ul>
+                    <li>記録時間 : <span id="time_count">0</span></li>
+                    <li>記録数 : <span id="recode_count">0</span></li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="ui main container">
+            <div class="ui segment">
+                <h4 class="ui header"><i class="save area icon"></i>Menu</h4>
+                <button id="rec_start" class="ui button">開始</button> <button id="rec_stop" class="ui button">停止</button>
+            </div>
+
+            <div class="ui segment">
+                <h4 class="ui header"><i class="save area icon"></i>Luaモジュールダウンロード</h4>
+
+                <button id="rec_dl" class="ui button"><i class="download area icon"></i>配列形式</button>
+                <button id="rec_dl_offset248" class="ui button"><i class="download area icon"></i>offset248型式</button>
+
+                <h4 class="ui header"><i class="edit area icon"></i>情報の入力</h4>
+                <div class="ui form">
+                    <div class="field">
+                        <label>曲の長さ(ミリ秒／duration)、0の場合最後に記録された時間になります</label>
+                        <input type="text" id="duration" value="0">
+                    </div>
+                </div>
+                <h4 class="ui header"><i class="edit area icon"></i>MP3ファイル</h4>
+                <div class="ui segment">
+                    <div id="drop_zone">ここにmp3ファイルをドロップした後に開始ボタンを押すと曲が再生されます。<br>曲の長さも自動入力されます</div>
+                </div>
+
+            </div>
+
+
+
+
+        </div>
+
+        <div class="ui segment">
+            <h4 class="ui header"><i class="chart area icon"></i>Drums(10ch)</h4>
+            <div id="drums" 　style="margin:0px;padding:0px"></div>
+
+            <div style="margin:0px;padding:0px" id="drum_note">10ch:xx=undefined</div>
+            <div style="margin:0px;padding:0px" id="drum_note2"></div>
+        </div>
+
+        <div class="ui segment">
+            <h4 class="ui header"><i class="chart area icon"></i>MIDI入力モニター</h4>
+            <div id="kenban" 　style="margin:0px;padding:0px"></div>
+            <div id="midi_moniter" 　style="margin:0px;padding:0px">000(0x00) , 000(0x00) , 00</div>
+        </div>
+
+        <div class="ui message">
+            <h4 class="ui header"><i class="chart area icon"></i>MIDIデバイス情報</h4>
+            <div class="" id="midi_device"></div>
+        </div>
+    </div>
+</body>
+
+</html>
