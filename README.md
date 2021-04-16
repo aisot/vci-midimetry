@@ -8,7 +8,7 @@
 * https://aisot.org/vci-midimetry/sample1.zip
 
 ## MIDI入力をluaモジュールに変換するツール
-* https://aisot.org/vci-midimetry/midi-recode.html
+* https://aisot.github.io/vci-midimetry/midi-recode.html
 
 ## 動作確認
 
