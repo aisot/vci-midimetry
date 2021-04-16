@@ -1,10 +1,14 @@
 # vci-midimetry
 
 バーチャルキャストのVCIでMIDIデータを扱うためのライブラリ及び変換ツールです
-まだ作りかけです。
+ドキュメントはまだありません。
+サンプルVCIのREADME.txtを参考にしてください。
 
-## 動作ページ
-* https://aisot.github.io/vci-webmetry
+## サンプルVCI
+* https://aisot.org/vci-midimetry/sample1.zip
+
+## MIDI入力をluaモジュールに変換するツール
+* https://aisot.org/vci-midimetry/midi-recode.html
 
 ## 動作確認
 
