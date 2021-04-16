@@ -10,7 +10,7 @@
 ## MIDI入力をluaモジュールに変換するツール
 * https://aisot.github.io/vci-midimetry/midi-recode.html
 
-### 各モジュールについて
+### sample1の各モジュールについて
 #### main.lua
 * Audioファイル名やmidiチャンネルの割り当て、3Dモデルのオブジェクト名やマテリアル名、鍵盤の数や開始位置の設定をここで行います
 
