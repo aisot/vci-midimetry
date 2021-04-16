@@ -21,7 +21,7 @@
 * 楽器を光らせる処理を行っています。midi-metryから呼ばれる事を想定しています。
 
 ### perf_data_offset248.lua
-*　演奏データのサンプルです。上記の midi-recode.html で作成します。
+* 演奏データのサンプルです。上記の midi-recode.html で作成します。
 
 
 ## ライセンス
