@@ -15,4 +15,3 @@
 ## ライセンス
 MIT License
 
-## Libraries
