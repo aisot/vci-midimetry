@@ -2,7 +2,7 @@
 
 バーチャルキャストのVCIでMIDIデータを扱うためのライブラリ及び変換ツールです
 ドキュメントはまだありません。
-サンプルVCIのREADME.txtを参考にしてください。
+サンプルVCI(sample1.zip)のREADME.txtやluaスクリプトを参考にしてください。
 
 ## サンプルVCI
 * https://aisot.org/vci-midimetry/sample1.zip
